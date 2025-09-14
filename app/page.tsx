@@ -1,10 +1,12 @@
 // app/page.tsx
 export default async function Home() {
-  const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL ?? ""}/api/health`, {
-    cache: "no-store",
-  }).catch(() => null);
-
-  const data = res ? await res.json() : null;
+  let data: any = null;
+  try {
+    const res = await fetch("/api/health", { cache: "no-store" });
+    data = await res.json();
+  } catch (e) {
+    // ignore – will render Not OK below
+  }
 
   return (
     <main className="p-8">
