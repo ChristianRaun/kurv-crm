@@ -5,10 +5,12 @@ export default async function Home() {
   let data: Health | null = null;
 
   try {
-    const res = await fetch("/api/health", { cache: "no-store" });
+    const res = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL ?? ""}/api/health`, {
+      cache: "no-store",
+    });
     data = (await res.json()) as Health;
   } catch {
-    // ignore – show "Not OK" below
+    // ignore – show Not OK below
   }
 
   return (
