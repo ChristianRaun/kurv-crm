@@ -1,11 +1,14 @@
 // app/page.tsx
+type Health = { ok: boolean; conversations: number };
+
 export default async function Home() {
-  let data: any = null;
+  let data: Health | null = null;
+
   try {
     const res = await fetch("/api/health", { cache: "no-store" });
-    data = await res.json();
-  } catch (e) {
-    // ignore – will render Not OK below
+    data = (await res.json()) as Health;
+  } catch {
+    // ignore – show "Not OK" below
   }
 
   return (
