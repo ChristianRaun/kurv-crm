@@ -1,9 +1,15 @@
 // app/api/health/route.ts
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import { createClient } from "@supabase/supabase-js";
 
 export async function GET() {
-  const { count, error } = await supabaseAdmin
+  const supa = createClient(
+    process.env.SUPABASE_URL!,           // server-only
+    process.env.SUPABASE_SERVICE_ROLE!,  // server-only
+    { auth: { persistSession: false } }
+  );
+
+  const { count, error } = await supa
     .from("conversations")
     .select("id", { count: "exact", head: true });
 
