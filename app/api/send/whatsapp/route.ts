@@ -1,26 +1,45 @@
+// app/api/send/whatsapp/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+
+export const runtime = "nodejs"; // ensure Node runtime (not Edge)
 
 export async function POST(req: Request) {
   try {
     const { to, body, conversation_id } = await req.json();
 
     if (!to || !body) {
-      return NextResponse.json({ ok: false, error: "Missing to/body" }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "Missing 'to' or 'body'" },
+        { status: 400 }
+      );
+    }
+
+    // ---- Env checks ----
+    const sid   = process.env.TWILIO_ACCOUNT_SID;
+    const token = process.env.TWILIO_AUTH_TOKEN;
+    const from  = process.env.TWILIO_WHATSAPP_FROM; // e.g. "whatsapp:+14155238886"
+
+    if (!sid || !token || !from) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "Missing Twilio env vars. Required: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM",
+        },
+        { status: 500 }
+      );
     }
 
     // ---- Twilio send ----
-    const sid   = process.env.TWILIO_ACCOUNT_SID!;
-    const token = process.env.TWILIO_AUTH_TOKEN!;
-    const from  = process.env.TWILIO_WHATSAPP_FROM!; // e.g. whatsapp:+14155238886
-
+    const auth = Buffer.from(`${sid}:${token}`).toString("base64");
     const twilioRes = await fetch(
       `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
-          Authorization: "Basic " + Buffer.from(`${sid}:${token}`).toString("base64"),
+          Authorization: `Basic ${auth}`,
         },
         body: new URLSearchParams({
           From: from,
@@ -32,43 +51,62 @@ export async function POST(req: Request) {
 
     const tw = await twilioRes.json();
     if (!twilioRes.ok) {
-      // Twilio error details in tw.message (helpful!)
-      return NextResponse.json({ ok: false, error: tw?.message || "Twilio error" }, { status: 502 });
+      // Twilio sends useful messages in "message"
+      return NextResponse.json(
+        { ok: false, error: tw?.message || "Twilio error", details: tw },
+        { status: 502 }
+      );
     }
 
     // ---- Log to Supabase ----
-    const supa = createClient(
-      process.env.SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE!,
-      { auth: { persistSession: false } }
-    );
+    const supaUrl = process.env.SUPABASE_URL;
+    const supaKey = process.env.SUPABASE_SERVICE_ROLE;
+    if (!supaUrl || !supaKey) {
+      // Log send succeeded even if we can't log it in DB
+      return NextResponse.json({
+        ok: true,
+        sid: tw.sid,
+        warning: "Missing Supabase env vars; message sent but not logged",
+      });
+    }
 
-    let convId = conversation_id as string | undefined;
+    const supa = createClient(supaUrl, supaKey, { auth: { persistSession: false } });
+
+    let convId: string | undefined = conversation_id;
 
     // Try to reuse/create conversation by 'to' contact
     if (!convId) {
-      const toPhone = to.replace("whatsapp:", "");
-      const contact = (await supa
-        .from("contacts")
-        .select("id")
-        .contains("phones", [toPhone])
-        .maybeSingle()).data;
+      const toPhone = to.replace("whatsapp:", ""); // keep "+" if present
+      const contact = (
+        await supa
+          .from("contacts")
+          .select("id")
+          .contains("phones", [toPhone])
+          .maybeSingle()
+      ).data;
 
       if (contact?.id) {
-        const conv = (await supa
-          .from("conversations")
-          .select("id")
-          .eq("contact_id", contact.id)
-          .eq("channel", "whatsapp")
-          .order("last_msg_at", { ascending: false })
-          .limit(1)
-          .maybeSingle()).data;
+        const conv = (
+          await supa
+            .from("conversations")
+            .select("id")
+            .eq("contact_id", contact.id)
+            .eq("channel", "whatsapp")
+            .order("last_msg_at", { ascending: false })
+            .limit(1)
+            .maybeSingle()
+        ).data;
 
-        if (conv?.id) convId = conv.id;
-        else {
+        if (conv?.id) {
+          convId = conv.id;
+        } else {
           const created = await supa
             .from("conversations")
-            .insert({ contact_id: contact.id, channel: "whatsapp", status: "open" })
+            .insert({
+              contact_id: contact.id,
+              channel: "whatsapp",
+              status: "open",
+            })
             .select("id")
             .single();
           convId = created.data?.id;
@@ -84,16 +122,21 @@ export async function POST(req: Request) {
         body,
         channel_meta: { sid: tw.sid, to },
       });
-      await supa.from("conversations").update({ last_msg_at: new Date().toISOString() }).eq("id", convId);
+      await supa
+        .from("conversations")
+        .update({ last_msg_at: new Date().toISOString() })
+        .eq("id", convId);
     }
 
     return NextResponse.json({ ok: true, sid: tw.sid, conversation_id: convId ?? null });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: e?.message || String(e) },
+      { status: 500 }
+    );
   }
 }
 
-// Optional GET to quick-check the route works
 export async function GET() {
   return NextResponse.json({ ok: true, route: "/api/send/whatsapp" });
 }
