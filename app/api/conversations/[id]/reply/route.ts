@@ -1,19 +1,20 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer";
 
-type Params = { params: { id: string } };
+// context.params is a *Promise* in Next 15 route handlers
+type RouteContext = { params: Promise<{ id: string }> };
 
-// helper: ensure the number is in whatsapp: format for Twilio
 function asWhatsApp(n: string) {
   const s = n.trim();
   return s.startsWith("whatsapp:") ? s : `whatsapp:${s}`;
 }
 
-export async function POST(req: Request, { params }: Params) {
+export async function POST(req: NextRequest, context: RouteContext) {
   try {
-    const convId = params.id;
+    // 👇 await the params (this is what your build error was about)
+    const { id: convId } = await context.params;
 
-    // ---- Read body as JSON or form-data, and fall back to parsing raw text
+    // ---- Read body as JSON or form-data, with raw-text fallback
     let bodyText: string | null = null;
     const ctype = req.headers.get("content-type") || "";
 
@@ -27,13 +28,11 @@ export async function POST(req: Request, { params }: Params) {
       bodyText = v ? String(v).trim() : null;
     } else {
       const txt = (await req.text()) || "";
-      // try JSON if it happens to be JSON
       try {
         const js = JSON.parse(txt);
         bodyText =
           js && typeof js.body === "string" ? (js.body as string).trim() : null;
       } catch {
-        // otherwise, treat whole text body as the message
         bodyText = txt.trim() || null;
       }
     }
@@ -61,7 +60,6 @@ export async function POST(req: Request, { params }: Params) {
       );
     }
 
-    // prefer contact.whatsapp, else first phone
     const toRaw: string | null =
       (conv as any).contact?.whatsapp ||
       (Array.isArray((conv as any).contact?.phones)
@@ -75,7 +73,7 @@ export async function POST(req: Request, { params }: Params) {
       );
     }
 
-    // base URL for calling our internal /api/send/whatsapp
+    // Use configured base URL if present; otherwise use current origin
     const origin =
       process.env.NEXT_PUBLIC_BASE_URL || new URL("/", req.url).origin;
 
@@ -97,7 +95,6 @@ export async function POST(req: Request, { params }: Params) {
       );
     }
 
-    // /api/send/whatsapp already logs the message to Supabase
     return NextResponse.json({ ok: true, ...js });
   } catch (e: any) {
     console.error("reply route error:", e);
